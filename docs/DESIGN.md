@@ -1,6 +1,6 @@
 # pitwall 설계 문서
 
-- 상태: 초안 v0.1
+- 상태: 초안 v0.2 (M1 시작 전 공식 hooks 문서 확인 반영)
 - 작성일: 2026-11-10
 - 대상 독자: pitwall을 구현하는 사람과 Claude Code
 
@@ -62,8 +62,8 @@ starting ──▶ working ◀──▶ needs_permission
 |---|---|---|
 | `starting` | 세션이 등록됐고 아직 첫 지시가 없음 | `SessionStart` hook, 또는 owned 세션 spawn |
 | `working` | Claude가 처리 중 | `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, 권한 응답 직후 |
-| `needs_permission` | 도구 사용 승인 대기 | `PermissionRequest` hook |
-| `needs_input` | Claude가 사용자 입력을 기다림 (질문 등) | `Notification` hook (메시지로 판별), `Stop` 이후 질문으로 끝난 경우는 판별하지 않음 |
+| `needs_permission` | 도구 사용 승인 대기 | `PermissionRequest` hook. 보조로 `Notification`(`notification_type = permission_prompt`) |
+| `needs_input` | Claude가 사용자 입력을 기다림 (질문 등) | `Notification` hook의 `notification_type`이 `elicitation_dialog` 또는 `agent_needs_input`. `Stop` 이후 질문으로 끝난 경우는 판별하지 않음 |
 | `idle` | 응답을 끝내고 다음 지시를 기다림 | `Stop` hook |
 | `ended` | 세션 정상 종료 | `SessionEnd` hook, owned 프로세스 정상 종료 |
 | `failed` | 비정상 종료 | owned 프로세스 비정상 종료 코드 |
@@ -71,6 +71,8 @@ starting ──▶ working ◀──▶ needs_permission
 
 추가 규칙:
 - observed 세션에서 hook이 일정 시간(기본 30분) 동안 오지 않으면 `stale` 표시를 붙인다. 상태 자체는 바꾸지 않는다.
+- 사용자가 Esc로 중단하면 `Stop` hook이 오지 않는다(공식 문서). 그 세션은 다음 hook이 올 때까지 `working`으로 남고, 오래되면 `stale`로 보인다.
+- `Notification`의 `idle_prompt`는 상태를 바꾸지 않는다 (이미 `idle`).
 - 상태 전환은 `pitwall-core`의 한 곳(상태 머신 모듈)에서만 일어난다. 테스트로 전환표를 고정한다.
 
 ---
@@ -151,13 +153,15 @@ pitwall/
   3. 변경 diff를 보여 주고 확인(y/N)을 받은 뒤 쓴다. `--yes`로 생략 가능.
   4. `pitwall init --uninstall`은 pitwall이 추가한 항목만 제거한다. 식별을 위해 명령 문자열에 `pitwall hook`이 들어간 항목만 대상으로 한다.
 - 등록할 이벤트: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `PermissionRequest`
-- 각 hook의 명령: `pitwall hook <EventName>`
+- 각 hook의 명령: `"<pitwall 실행 파일 절대 경로>" hook <EventName>`. PATH에 의존하지 않는다 (개발 빌드, Windows PATH 문제).
+- `--uninstall` 식별 규칙: 명령 문자열에 pitwall 실행 파일 이름(`pitwall` 또는 `pitwall.exe`)과 ` hook `이 함께 들어간 항목만 제거한다.
+- matcher는 쓰지 않는다 (모든 도구, 모든 notification_type).
 
 ### 4.2 `pitwall hook <event>` 서브커맨드
 curl 대신 자체 서브커맨드를 쓴다. Windows와 macOS에서 똑같이 동작하고, 토큰 처리와 실패 처리를 한 곳에서 할 수 있다.
 
 - stdin으로 받은 hook JSON을 그대로 `POST http://127.0.0.1:<port>/hooks/<event>`로 보낸다.
-- 포트와 토큰은 `~/.pitwall/runtime.json`에서 읽는다 (서버가 시작할 때 쓴다).
+- 포트와 토큰은 `~/.pitwall/runtime.json`에서 읽는다 (서버가 시작할 때 쓴다). `PITWALL_HOME` 환경 변수로 `~/.pitwall` 위치를 바꿀 수 있다 (테스트용).
 - **서버가 꺼져 있거나 응답이 없으면 아무것도 출력하지 않고 exit 0.** Claude Code 작업을 절대 막지 않는다.
 - 일반 이벤트는 짧은 타임아웃(1초)으로 보내고 응답을 기다리지 않는다.
 - `PermissionRequest`만 응답을 기다린다 (4.4).
@@ -166,17 +170,18 @@ curl 대신 자체 서브커맨드를 쓴다. Windows와 macOS에서 똑같이 �
 
 | hook | 사용하는 필드 | 처리 |
 |---|---|---|
-| `SessionStart` | `session_id`, `cwd`, `source` [확인 필요] | 세션 등록. `cwd`로 프로젝트와 workspace 매칭. 상태 `starting` |
+| `SessionStart` | `session_id`, `cwd`, `source`(`startup`/`resume`/`clear`/`compact`/`fork`), `model`(없을 수 있음) | 세션 등록. `cwd`로 프로젝트와 workspace 매칭. 상태 `starting` |
 | `UserPromptSubmit` | `session_id`, `prompt` | 상태 `working`, 마지막 지시 저장 |
 | `PreToolUse` | `session_id`, `tool_name`, `tool_input` | 상태 `working`, "현재 작업" 표시 (예: `Bash: ./gradlew test`). 서버에서 디바운스 |
 | `PostToolUse` | `session_id`, `tool_name` | 활동 로그에 추가 |
-| `Notification` | `session_id`, `message` | 메시지가 입력 대기를 뜻하면 `needs_input`. 알림 발송 |
+| `Notification` | `session_id`, `message`, `title`(선택), `notification_type` | `notification_type`으로 판별 (2.1). 알림 발송 |
 | `PermissionRequest` | `session_id`, `tool_name`, `tool_input` | `needs_permission`, 대기 요청 생성 (4.4) |
-| `Stop` | `session_id` | 상태 `idle` |
-| `SessionEnd` | `session_id`, `reason` [확인 필요] | 상태 `ended` |
+| `Stop` | `session_id`, `last_assistant_message` | 상태 `idle` |
+| `SessionEnd` | `session_id`, `reason`(`clear`/`resume`/`logout`/`prompt_input_exit`/`other`) | 상태 `ended`. SessionEnd hook 전체 예산이 1.5초이므로 전송 타임아웃 1초를 넘기지 않는다 |
 
 - `cwd` 매칭 규칙: 등록된 프로젝트 경로 또는 그 프로젝트의 worktree 경로(`git worktree list --porcelain`으로 구함) 아래면 그 프로젝트 소속이다. 어디에도 안 맞으면 "미분류" 프로젝트로 보여 주고, UI에서 등록을 제안한다.
 - 경로 비교는 정규화(대소문자, 구분자, 심볼릭 링크) 후 한다. Windows에서 특히 주의한다.
+- 모든 hook 입력에는 공통 필드 `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `permission_mode`가 온다. `transcript_path`는 읽지 않는다 (1.3).
 
 ### 4.4 권한 승인 흐름 (핵심 기능)
 
@@ -192,11 +197,12 @@ Claude Code ─▶ pitwall hook PermissionRequest ─▶ POST /hooks/PermissionR
 ```
 
 - 서버는 요청마다 `tokio::sync::oneshot`을 만들고, UI 응답이 오면 결정을 보낸다.
-- hook 출력 형식 [확인 필요]:
+- hook 출력 형식 (2026-11-10 공식 문서 확인. 입력에는 `tool_name`, `tool_input`, `permission_suggestions`가 온다. M3 시작 시 실제 동작으로 한 번 더 확인):
   ```json
   {"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
   ```
-  거부: `"behavior":"deny"`와 사유 메시지.
+  거부: `"behavior":"deny"`, `"message"`(Claude에게 전할 사유). `interrupt`, `updatedInput`, `updatedPermissions`는 쓰지 않는다.
+- 공식 문서: 결정 없이 exit 0 하면 원래 권한 흐름대로 진행된다. 침묵은 승인이 아니다.
 - **타임아웃 동작**: 정해진 시간(기본 50초. Claude Code hook 타임아웃보다 짧게) 안에 응답이 없으면 **아무 결정도 출력하지 않고 exit 0** 한다. 그러면 Claude Code가 원래대로 터미널에서 사용자에게 묻는다. pitwall이 대신 허용하는 일은 절대 없다.
 - 터미널에서 먼저 답한 경우: 대기 요청이 남아 있을 수 있으므로, 같은 세션에서 `PostToolUse`나 `UserPromptSubmit`, `Stop`이 오면 그 세션의 대기 요청을 정리한다.
 - "항상 허용" 같은 규칙 저장 기능은 MVP에서 하지 않는다. 그건 Claude Code의 permissions 설정이 할 일이다.
@@ -231,7 +237,7 @@ MVP에는 DB를 두지 않는다.
 | 파일 | 내용 |
 |---|---|
 | `~/.pitwall/config.toml` | 등록한 프로젝트 목록, 포트, 알림 설정 |
-| `~/.pitwall/runtime.json` | 실행 중인 서버의 포트, 토큰, PID. 서버 종료 시 삭제. 권한 0600 (Windows는 사용자 전용 ACL) |
+| `~/.pitwall/runtime.json` | 실행 중인 서버의 포트, 토큰, PID. 서버 종료 시 삭제. Unix는 권한 0600. Windows는 사용자 프로필 폴더의 기본 ACL에 맡긴다 (결정 기록) |
 | 메모리 상태 | 세션 목록과 상태, 대기 요청, 활동 로그. 서버를 재시작하면 사라진다 |
 
 `config.toml` 예시:
@@ -316,7 +322,10 @@ pitwall은 프로세스를 실행하고 권한 요청에 답할 수 있다. 다�
 2. 서버 시작 시 256비트 랜덤 토큰을 만든다.
    - 브라우저: 시작 URL `http://127.0.0.1:7311/#token=...`로 전달한다. 프론트는 이를 메모리에 보관하고 `Authorization: Bearer` 헤더로 보낸다. 쿠키는 쓰지 않는다.
    - hook: `~/.pitwall/runtime.json`에서 읽는다.
-3. `Origin` 헤더 검사: REST와 WebSocket 모두 `http://127.0.0.1:<port>`만 허용한다. 다른 웹사이트가 localhost로 요청을 보내는 공격(DNS rebinding, CSRF)을 막는다. `Host` 헤더도 검사한다.
+   - WebSocket: 브라우저 WebSocket은 헤더를 못 붙이므로 `Sec-WebSocket-Protocol: pitwall, <token>`으로 보낸다. 서버는 `pitwall`을 선택해 응답한다. URL 쿼리는 로그에 남을 수 있어 쓰지 않는다.
+3. `Origin` 헤더 검사: REST와 WebSocket 모두 `http://127.0.0.1:<port>`만 허용한다. 다른 웹사이트가 localhost로 요청을 보내는 공격(DNS rebinding, CSRF)을 막는다. `Host` 헤더도 검사한다 (`127.0.0.1:<port>`만).
+   - `Origin`이 없는 요청(`pitwall hook` 같은 비브라우저 클라이언트)은 허용하되 토큰은 반드시 검사한다.
+   - 개발 중 Vite 프록시는 `Origin`과 `Host`를 백엔드 주소로 바꿔서 전달한다.
 4. 메모리 편집 API는 등록된 프로젝트 경로 아래의 허용된 파일(`CLAUDE.md`, `CLAUDE.local.md`, `.claude/**`의 텍스트 파일)만 다룬다. `..` 같은 경로 탈출을 막는다.
 5. 서버 로그에 프롬프트 내용과 도구 입력을 기본으로 남기지 않는다.
 6. 텔레메트리 없음.
@@ -411,7 +420,7 @@ UI 원칙:
 
 ## 12. 열린 질문
 - 첫 지시를 PTY 입력으로 넣을지, `claude` 실행 인자로 넘길지
-- `Notification` 메시지만으로 `needs_input`을 안정적으로 판별할 수 있는지. 안 되면 보조 신호가 필요한지
+- ~~`Notification` 메시지만으로 `needs_input`을 판별할 수 있는지~~ → `notification_type`으로 해결 (2026-11-10)
 - 기본 포트 번호 (임시 7311). 사용 중이면 자동으로 다음 포트를 쓸지
 - observed 세션에 답장(텍스트 입력)할 방법이 있는지. 현재 설계는 "IDE 터미널에서 답하기" 안내만 함
 
@@ -425,3 +434,8 @@ UI 원칙:
 | 2026-11-10 | 상태 판단은 hook 하나로만 | observed와 owned 세션을 같은 경로로 처리, 출력 파싱 의존 제거 |
 | 2026-11-10 | 권한 타임아웃 시 결정을 내리지 않음 | pitwall이 대신 허용하는 일이 없도록 |
 | 2026-11-10 | git은 명령 실행 방식 | worktree 지원, 사용자 git 설정 존중 |
+| 2026-11-10 | `needs_input`은 `Notification.notification_type`으로 판별 | 공식 문서에 타입 필드가 있음. 메시지 문구 해석보다 안정적 |
+| 2026-11-10 | hook 명령에 실행 파일 절대 경로 사용 | PATH 의존 제거. 개발 빌드와 Windows에서 바로 동작 |
+| 2026-11-10 | WebSocket 토큰은 `Sec-WebSocket-Protocol`로 전달 | 브라우저 WebSocket은 Authorization 헤더 불가. 쿼리는 로그 노출 위험. 쿠키는 쓰지 않는 원칙 |
+| 2026-11-10 | Windows `runtime.json`은 별도 ACL 설정 없음 | `%USERPROFILE%` 기본 ACL이 사용자, SYSTEM, Administrators만 허용. 직접 ACL 조작은 unsafe Win32 API가 필요해 M1 범위 대비 위험이 큼 |
+| 2026-11-10 | Origin 없는 요청은 토큰만 검사 | `pitwall hook`은 브라우저가 아니라 Origin을 보내지 않음. 브라우저 공격은 Origin 검사와 토큰으로 막힘 |
