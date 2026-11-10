@@ -349,6 +349,8 @@ pitwall은 프로세스를 실행하고 권한 요청에 답할 수 있다. 다�
 
 UI 원칙:
 - 상태는 색만으로 구분하지 않는다. 라벨 텍스트와 아이콘을 같이 쓴다.
+- 언어: 한국어와 영어. 기본값은 브라우저 언어(ko로 시작하면 한국어, 아니면 영어). 상단 바에서 바꿀 수 있고 선택은 브라우저 localStorage에 기억한다. 문구는 `web/src/i18n/{ko,en}.ts` 사전에만 둔다. 라이브러리는 쓰지 않는다.
+- CLI 출력(`pitwall init` 등)은 영어만 지원한다.
 - 키보드만으로 대기 세션 사이를 이동하고 승인할 수 있게 한다 (M3).
 
 ---
@@ -439,3 +441,4 @@ UI 원칙:
 | 2026-11-10 | WebSocket 토큰은 `Sec-WebSocket-Protocol`로 전달 | 브라우저 WebSocket은 Authorization 헤더 불가. 쿼리는 로그 노출 위험. 쿠키는 쓰지 않는 원칙 |
 | 2026-11-10 | Windows `runtime.json`은 별도 ACL 설정 없음 | `%USERPROFILE%` 기본 ACL이 사용자, SYSTEM, Administrators만 허용. 직접 ACL 조작은 unsafe Win32 API가 필요해 M1 범위 대비 위험이 큼 |
 | 2026-11-10 | Origin 없는 요청은 토큰만 검사 | `pitwall hook`은 브라우저가 아니라 Origin을 보내지 않음. 브라우저 공격은 Origin 검사와 토큰으로 막힘 |
+| 2026-11-10 | UI 한국어/영어 지원, 사전 파일 방식 | 사용자 요청. 문구가 적어 i18n 라이브러리 없이 충분. CLI는 오픈소스 관례대로 영어만 |
