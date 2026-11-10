@@ -75,7 +75,7 @@ pitwall can start processes and answer permission prompts, so it is built to be 
 
 ## Roadmap
 
-- [ ] M0: Repository skeleton, CI
+- [x] M0: Repository skeleton, CI
 - [ ] M1: Hook receiver and read-only board for observed sessions
 - [ ] M2: Owned sessions (PTY) with in-browser terminals and replies
 - [ ] M3: Approvals from the board, OS notifications
