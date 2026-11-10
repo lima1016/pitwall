@@ -3,9 +3,25 @@
 
 use std::path::{Path, PathBuf};
 
-/// 실제 경로로 정규화한다. 파일이 없으면 접두사만 정리한 원래 경로를 쓴다.
+/// 실제 경로로 정규화한다. 경로가 없으면 존재하는 가장 가까운 상위 폴더까지 실제 경로로 풀고
+/// 나머지를 붙인다. 그래야 심볼릭 링크(macOS `/var` → `/private/var`)나 8.3 짧은 이름
+/// (Windows `RUNNER~1`) 아래의 없는 경로도 같은 키가 나온다.
 pub fn normalize(path: &Path) -> PathBuf {
-    dunce::canonicalize(path).unwrap_or_else(|_| dunce::simplified(path).to_path_buf())
+    if let Ok(real) = dunce::canonicalize(path) {
+        return real;
+    }
+    let mut rest = Vec::new();
+    let mut cur = path;
+    while let Some(parent) = cur.parent() {
+        if let Some(name) = cur.file_name() {
+            rest.push(name.to_owned());
+        }
+        if let Ok(real) = dunce::canonicalize(parent) {
+            return rest.iter().rev().fold(real, |acc, n| acc.join(n));
+        }
+        cur = parent;
+    }
+    dunce::simplified(path).to_path_buf()
 }
 
 /// 비교용 문자열 키. 같은 위치면 같은 키가 나온다.
@@ -102,6 +118,30 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         assert!(is_within(&sub, dir.path()));
         assert!(!is_within(dir.path(), &sub));
+    }
+
+    #[test]
+    fn missing_child_resolves_through_existing_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = normalize(dir.path());
+        let missing = dir.path().join("not").join("yet");
+        assert_eq!(normalize(&missing), real.join("not").join("yet"));
+        assert!(is_within(&missing, dir.path()));
+    }
+
+    /// 링크 아래의 없는 경로도 실제 경로와 같은 키가 나와야 한다 (macOS /var, Windows 8.3 이름).
+    #[cfg(unix)]
+    #[test]
+    fn missing_path_under_symlink_matches_real_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(
+            compare_key(&link.join("src")),
+            compare_key(&real.join("src"))
+        );
     }
 
     #[test]
