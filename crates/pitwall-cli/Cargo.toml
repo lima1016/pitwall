@@ -1,0 +1,28 @@
+[package]
+name = "pitwall-cli"
+description = "Your pit wall for Claude Code sessions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "pitwall"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = "0.8.9"
+clap = { version = "4.6.7", features = ["derive"] }
+mime_guess = "2.0.5"
+pitwall-core = { path = "../pitwall-core" }
+rust-embed = "8.13.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+tower = { version = "0.5.3", features = ["util"] }
