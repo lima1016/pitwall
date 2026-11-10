@@ -1,0 +1,12 @@
+[package]
+name = "pitwall-core"
+description = "Domain logic for pitwall. Knows nothing about HTTP."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
